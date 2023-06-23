@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
-import express from "express";
-import mongoose from "mongoose";
+import express, { Request, Response } from "express";
+import mongoose, { isValidObjectId } from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
@@ -10,6 +10,7 @@ import { ZodError, z } from "zod";
 
 import { User } from "../models/User";
 import { RegisterValidationError } from "./errors/RegisterValidationError";
+import { verifyToken } from "./utils/verifyToken";
 
 // APP
 
@@ -27,7 +28,7 @@ app.use(express.json());
 
 // Register User
 
-const registerBodySchema = z
+const RegisterUserBodySchema = z
   .object({
     name: z.string(),
     email: z.string().email(),
@@ -39,9 +40,9 @@ const registerBodySchema = z
     message: "Password don't match",
   });
 
-app.post("/auth/register", async (req, res) => {
+app.post("/auth/register", async (req: Request, res: Response) => {
   try {
-    const { name, email, password } = registerBodySchema.parse(req.body);
+    const { name, email, password } = RegisterUserBodySchema.parse(req.body);
 
     const userExists = await User.findOne({ email: email });
 
@@ -67,6 +68,76 @@ app.post("/auth/register", async (req, res) => {
 
       return res.status(422).json(validationError);
     }
+    return res
+      .status(500)
+      .json({ message: "Server error ocurred, try again later!" });
+  }
+});
+
+// Login User
+
+const LoginUserBodySchema = z.object({
+  email: z.string().email(),
+  password: z.string(),
+});
+
+app.post("/auth/user", async (req: Request, res: Response) => {
+  try {
+    const { email, password } = LoginUserBodySchema.parse(req.body);
+
+    const user = await User.findOne({ email: email });
+
+    const checkPassword = await bcrypt.compare(password, user?.password || "");
+
+    if (!user || !checkPassword) {
+      return res.status(400).json({ message: "Invalid Credentials!" });
+    }
+
+    const secretKey = process.env.SECRET_KEY as string;
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+      },
+      secretKey,
+      {
+        expiresIn: '15m'
+      }
+    );
+
+    return res.status(200).json({ message: "Authetication success!", token });
+  } catch (err) {
+    if (err instanceof ZodError) {
+      const validationError = RegisterValidationError(err);
+
+      return res.status(422).json(validationError);
+    }
+    return res
+      .status(500)
+      .json({ message: "Server error ocurred, try again later!" });
+  }
+});
+
+// Private Route
+
+app.get("/user/:id", verifyToken, async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+
+    const isValidId = isValidObjectId(id);
+
+    if (!isValidId) {
+      return res.status(422).json({ message: "Invalid ID!" });
+    }
+
+    const user = await User.findById(id, '-password');
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found!" });
+    }
+
+    return res.status(200).json({ user });
+  } catch (err) {
     return res
       .status(500)
       .json({ message: "Server error ocurred, try again later!" });
